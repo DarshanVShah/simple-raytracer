@@ -32,6 +32,7 @@ struct Camera {
     pixel_delta_ud: DVec3,
     pixel00_loc: DVec3,
     samples_per_pixel: u32, // Number of samples per pixel for anti-aliasing
+    max_depth: u32, // Maximum recursion depth for ray tracing
 }
 
 impl Camera {
@@ -69,6 +70,7 @@ impl Camera {
             pixel_delta_ud,
             pixel00_loc,
             samples_per_pixel: 100, // Set the number of samples per pixel for anti-aliasing
+            max_depth: 50, // Set the maximum recursion depth for ray tracing
         }
     }
 
@@ -115,7 +117,7 @@ impl Camera {
                 .into_iter() // Create an iterator for the number of samples per pixel
                 .map(|_| {
                     let ray = self.get_ray(col as i32, row as i32); // Get a ray for the current pixel
-                    ray.color(world) * self.max_value // Calculate the color of the ray based on its intersection with objects in the world
+                    ray.color(self.max_depth as i32, world) * self.max_value // Calculate the color of the ray based on its intersection with objects in the world
                 })
                 .fold(DVec3::ZERO, |acc, color| acc + color) * scale_factor; // Sum the colors and apply the scale factor
 
@@ -150,6 +152,38 @@ fn basic_scene() -> Image {
     // Render the scene using the camera and the world objects
     camera.render(&world) // Return the rendered image
     
+}
+
+//Diffuse material 
+fn random_in_unit_sphere() -> DVec3 {
+    // Generate a random point inside a unit sphere
+    let mut rng = rand::rng(); // Create a random number generator
+    loop {
+        let p = DVec3::new(
+            rng.random::<f64>() * 2.0 - 1.0, // Random x coordinate in the range [-1, 1]
+            rng.random::<f64>() * 2.0 - 1.0, // Random y coordinate in the range [-1, 1]
+            rng.random::<f64>() * 2.0 - 1.0, // Random z coordinate in the range [-1, 1]
+        );
+        if p.length_squared() < 1.0 {
+            break p; // If the point is inside the unit sphere (length squared < 1), return it
+        }
+    }
+}
+
+
+fn random_unit_vector() -> DVec3 { 
+    return random_in_unit_sphere().normalize() // Generate a random vector and normalize it to get a unit vector
+}
+
+fn random_on_hemisphere(normal: &DVec3) -> DVec3 {
+    let on_unit_sphere = random_unit_vector(); // Generate a random unit vector
+    if on_unit_sphere.dot(*normal) > 0.0 {
+        // If the dot product with the normal is positive, return the vector
+        on_unit_sphere
+    } else {
+        // Otherwise, return the negated vector to ensure it points in the hemisphere defined by the normal
+        -on_unit_sphere
+    }
 }
 
 // Trait to define hittable objects
@@ -372,13 +406,24 @@ impl Ray {
         self.origin + t * self.direction
     }
 
-    fn color<T>(&self, world: &T) -> DVec3 // Calculate the color of the ray based on its intersection with objects in the world
+    fn color<T>(&self, depth: i32, world: &T) -> DVec3 // Calculate the color of the ray based on its intersection with objects in the world
     where
         T: Hittable, // Ensure that T implements the Hittable trait
     {
-        if let Some(rec) = world.hit(self, 0.0..f64::INFINITY) {
+        if depth <= 0 {
+            // If the recursion depth is zero, return a background color
+            return DVec3::ZERO; // Return black color
+        }
+        // Check if the ray hits any object in the world
+        // If the ray hits an object, calculate the color based on the hit record
+        if let Some(rec) = world.hit(self, (0.001)..f64::INFINITY) {
             // Check if the ray hits any object in the world
-            return 0.5 * (rec.normal + DVec3::new(1.0, 1.0, 1.0)); // Return a color based on the normal at the hit point
+            let direction: DVec3 = random_on_hemisphere(&rec.normal); // Generate a random direction on the hemisphere defined by the hit normal
+            let scattered_ray = Ray {
+                origin: rec.point, // Set the origin of the scattered ray to the hit point
+                direction,         // Set the direction of the scattered ray
+            };
+            return 0.5 * scattered_ray.color(depth - 1, world); // Recursively calculate the color of the scattered ray, reducing the depth by 1
         }
 
         // If the ray does not hit any object, return a background color
