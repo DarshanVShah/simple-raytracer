@@ -21,29 +21,80 @@ fn main() -> std::io::Result<()> {
     Ok(()) // Return Ok to indicate successful completion
 }
 
+struct Camera {
+    img_width: usize,
+    img_height: usize,
+    max_value: f64,
+    aspect_ratio: f64,
+    camera_center: DVec3,
+    pixel_delta_lr: DVec3,
+    pixel_delta_ud: DVec3,
+    pixel00_loc: DVec3,
+}
+
+impl Camera {
+    fn new(img_width: usize, aspect_ratio: f64) -> Self {
+        // Create a new Camera instance with the specified parameters
+        let focal_len = 1.0; // Define the focal length of the camera
+        let max_value = 255.999; // Define the maximum value for pixel color components
+        let img_height = (img_width as f64 / aspect_ratio) as usize; // Calculate the height of the image based on the aspect ratio
+        let viewport_height = 2.0; // Define the height of the viewport
+        let viewport_width = viewport_height * aspect_ratio; // Calculate the width of the viewport based on the aspect ratio
+        let camera_center = DVec3::new(0.0, 0.0, 0.0); // Define the center of the camera in 3D space
+
+        let viewport_lr = DVec3::new(viewport_width, 0.0, 0.0); // Define the right direction vector of the viewport
+        let viewport_ud = DVec3::new(0.0, -viewport_height, 0.0); // Define the up direction vector of the viewport
+
+        // Calculate delta vectors for pixel size
+        let pixel_delta_lr = &viewport_lr / (img_width as f64);
+        let pixel_delta_ud = &viewport_ud / (img_height as f64);
+
+        // Calculate the location of the upper left corner of the viewport
+        let viewport_upper_left =
+            &camera_center - DVec3::new(0.0, 0.0, focal_len) - (&viewport_lr / 2.0) - (&viewport_ud / 2.0);
+
+        // Calculate the location of pixel (0, 0)
+        let pixel00_loc =
+            viewport_upper_left + 0.5 * (&pixel_delta_lr + &pixel_delta_ud);
+
+        Self {
+            img_width,
+            img_height,
+            max_value,
+            aspect_ratio,
+            camera_center,
+            pixel_delta_lr,
+            pixel_delta_ud,
+            pixel00_loc,
+        }
+    }
+
+    fn render(&self, world: &HittableList) -> Image {
+        // Render the scene by generating an image based on the camera parameters and the world objects
+        Image::new_with_init(self.img_height, self.img_width, |row, col| {
+            // Initialize each pixel with a color based on its position
+            let pixel_center =
+                &self.pixel00_loc + (row as f64) * &self.pixel_delta_ud + (col as f64) * &self.pixel_delta_lr;
+            let ray_dir = &pixel_center - &self.camera_center; // Calculate the direction of the ray from the camera center to the pixel center
+            let ray = Ray {
+                origin: self.camera_center,
+                direction: ray_dir,
+            }; // Create a new ray with the camera center as the origin and the calculated direction
+
+            let pixel_color = ray.color(world) * self.max_value; // Calculate the color of the pixel based on the ray's color and scale it to max_value
+            Pixel {
+                r: pixel_color.x as u8, // Extract the red component of the color
+                g: pixel_color.y as u8, // Extract the green component of the color
+                b: pixel_color.z as u8, // Extract the blue component of the color
+            }
+        })
+    }
+}
+
 fn basic_scene() -> Image {
-    let aspect_ratio = 16.0 / 9.0; // Define the aspect ratio of the image
-    let img_width: usize = 400;
-    let img_height = (img_width as f64 / aspect_ratio) as usize; // Calculate the height based on the aspect ratio
+    // Create a basic scene with a camera and some hittable objects
 
-    //camera
-    let focal_len = 1.;
-    let viewport_height = 2.;
-    let viewport_width = viewport_height * (img_width as f64 / img_height as f64); // Calculate the viewport width based on the aspect ratio
-    let camera_center = DVec3::new(0., 0., 0.); // Define the camera center in 3D space
-
-    let viewport_lr = DVec3::new(viewport_width, 0., 0.);
-    let viewport_ud = DVec3::new(0., -viewport_height, 0.);
-
-    //calculate delta vectors
-    let pixel_delta_lr = &viewport_lr / (img_width as f64); // Calculate the change in the right direction per pixel
-    let pixel_delta_ud = &viewport_ud / (img_height as f64); // Calculate the change in the up direction per pixel
-
-    //calculate the location of the upper left corner of the viewport
-    let viewport_upper_left =
-        &camera_center - DVec3::new(0., 0., focal_len) - (&viewport_lr / 2.) - (&viewport_ud / 2.); // Calculate the upper left corner of the viewport
-
-    let pixel00_loc = viewport_upper_left + 0.5 * (&pixel_delta_lr + &pixel_delta_ud); // Calculate the location of the pixel at row 0, column 0
+    let camera = Camera::new(400, 16.0 / 9.0); // Create a new camera with a width of 400 pixels and an aspect ratio of 16:9
 
     // Create a world with hittable objects
     let mut world = HittableList { objects: vec![] }; // Initialize a new HittableList to hold the objects in the scene
@@ -58,46 +109,10 @@ fn basic_scene() -> Image {
         radius: 100.,
     });
 
-    Image::new_with_init(img_height, img_width, |row, col| {
-        let pixel_center =
-            &pixel00_loc + (row as f64) * &pixel_delta_ud + (col as f64) * &pixel_delta_lr; // Calculate the center of the pixel at the given row and column
-        let ray_dir = &pixel_center - &camera_center; // Calculate the direction of the ray from the camera center to the pixel center
-        let ray = Ray {
-            origin: camera_center,
-            direction: ray_dir,
-        }; // Create a new ray with the camera center as the origin and the calculated direction
-
-        let pixel_color = ray.color(&world) * 255.999; // Calculate the color of the pixel based on the ray's color and scale it to 255
-        let r = pixel_color.x; // Extract the red component of the color
-        let g = pixel_color.y; // Extract the green component of the color
-        let b = pixel_color.z; // Extract the blue component of the color
-
-        Pixel {
-            // Create a new Pixel struct with the calculated RGB values
-            r: r as u8, // Convert the red component to u8
-            g: g as u8, // Convert the green component to u8
-            b: b as u8, // Convert the blue component to u8
-        }
-    })
+    // Render the scene using the camera and the world objects
+    camera.render(&world) // Return the rendered image
+    
 }
-
-// Function to check if a ray intersects with a sphere
-/*
-fn hit_sphere(center: &DVec3, radius: f64, ray: &Ray) -> f64 {
-    let origin_center = ray.origin - *center; // Calculate the vector from the ray's origin to the sphere's center
-    let a = ray.direction.length_squared(); // Calculate the dot product of the ray's direction with itself
-    let half_b = origin_center.dot(ray.direction); // Calculate the dot product of the origin-center vector with the ray's direction, multiplied by 2
-    let c = origin_center.length_squared() - radius * radius; // Calculate the dot product of the origin-center vector with itself, minus the square of the radius
-
-    let discriminant = half_b * half_b - a * c; // Calculate the discriminant of the quadratic equation
-
-    if discriminant < 0. { // If the discriminant is negative, there is no intersection
-        -1.0 // Return -1 to indicate no intersection
-    } else {
-        (- half_b - discriminant.sqrt()) / a // Calculate the intersection point using the quadratic formula
-    }
-}
-*/
 
 // Trait to define hittable objects
 trait Hittable {
