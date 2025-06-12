@@ -45,7 +45,7 @@ fn basic_scene() -> Image {
     Image::new_with_init(img_height, img_width, |row, col| {
         let pixel_center = &pixel00_loc + (row as f64) * &pixel_delta_ud + (col as f64) * &pixel_delta_lr; // Calculate the center of the pixel at the given row and column
         let ray_dir = &pixel_center - &camera_center; // Calculate the direction of the ray from the camera center to the pixel center
-        let ray = Ray { origin: pixel_center, direction: ray_dir }; // Create a new ray with the camera center as the origin and the calculated direction
+        let ray = Ray { origin: camera_center, direction: ray_dir }; // Create a new ray with the camera center as the origin and the calculated direction
 
         let pixel_color = ray.color() * 255.999; // Calculate the color of the pixel based on the ray's color and scale it to 255
         let r = pixel_color.x; // Extract the red component of the color
@@ -64,14 +64,19 @@ fn basic_scene() -> Image {
 }
 
 // Function to check if a ray intersects with a sphere
-fn hit_sphere(center: &DVec3, radius: f64, ray: &Ray) -> bool {
+fn hit_sphere(center: &DVec3, radius: f64, ray: &Ray) -> f64 {
     let origin_center = ray.origin - *center; // Calculate the vector from the ray's origin to the sphere's center
-    let a = ray.direction.dot(ray.direction); // Calculate the dot product of the ray's direction with itself
-    let b = 2.0 * origin_center.dot(ray.direction); // Calculate the dot product of the origin-center vector with the ray's direction, multiplied by 2
-    let c = origin_center.dot(origin_center) - radius * radius; // Calculate the dot product of the origin-center vector with itself, minus the square of the radius
+    let a = ray.direction.length_squared(); // Calculate the dot product of the ray's direction with itself
+    let half_b = origin_center.dot(ray.direction); // Calculate the dot product of the origin-center vector with the ray's direction, multiplied by 2
+    let c = origin_center.length_squared() - radius * radius; // Calculate the dot product of the origin-center vector with itself, minus the square of the radius
 
-    let discriminant = b * b - 4.0 * a * c; // Calculate the discriminant of the quadratic equation
-    discriminant >= 0.0 // Return true if the discriminant is positive, indicating that the ray intersects the sphere
+    let discriminant = half_b * half_b - a * c; // Calculate the discriminant of the quadratic equation
+    
+    if discriminant < 0. { // If the discriminant is negative, there is no intersection
+        -1.0 // Return -1 to indicate no intersection
+    } else {
+        (- half_b - discriminant.sqrt()) / a // Calculate the intersection point using the quadratic formula
+    }
 }
 
 // Function to create a sample image
@@ -166,9 +171,11 @@ impl Ray { // Create a new Ray with a given origin and direction
     }
 
     fn color(&self) -> DVec3 {
-        if (hit_sphere(&DVec3::new(0., 0., -1.), 0.5, self)) { // Check if the ray intersects with a sphere at (0, 0, -1) with radius 0.5
-            return DVec3::new(1.0, 0.0, 0.0); // Return red color if it hits the sphere
-        }
+        let t = hit_sphere(&DVec3::new(0., 0., -1.), 0.5, self);
+        if t > 0.0 { // If the ray intersects with the sphere
+            let normal = (self.at(t) - DVec3::new(0., 0., -1.)).normalize(); // Calculate the normal vector at the intersection point
+            return 0.5 * (normal + 1.0); // Return a color based on the normal vector
+        };
 
         let unit_direction: DVec3 =
             self.direction.normalize();
