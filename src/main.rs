@@ -3,6 +3,7 @@
 use glam::DVec3;
 use indicatif::ProgressIterator; // For progress bar functionality
 use itertools::Itertools;
+use rand::prelude::*; // For random number generation
 use k9::snapshot::source_code::Range;
 use std::{
     // Import necessary modules
@@ -30,6 +31,7 @@ struct Camera {
     pixel_delta_lr: DVec3,
     pixel_delta_ud: DVec3,
     pixel00_loc: DVec3,
+    samples_per_pixel: u32, // Number of samples per pixel for anti-aliasing
 }
 
 impl Camera {
@@ -66,13 +68,39 @@ impl Camera {
             pixel_delta_lr,
             pixel_delta_ud,
             pixel00_loc,
+            samples_per_pixel: 100, // Set the number of samples per pixel for anti-aliasing
         }
+    }
+
+    fn get_ray(&self, i: i32, j: i32) -> Ray {
+        // Generate a ray from the camera to a specific pixel (i, j)
+        let pixel_center =
+            &self.pixel00_loc + (i as f64) * &self.pixel_delta_lr + (j as f64) * &self.pixel_delta_ud;
+        
+        let pixel_sample = pixel_center + self.pixel_sample_square();
+
+        let ray_origin = self.camera_center; // The origin of the ray is the camera center
+        let ray_dir = &pixel_sample - ray_origin; // Calculate the direction of the ray
+        Ray {
+            origin: self.camera_center,
+            direction: ray_dir,
+        }
+    }
+
+    fn pixel_sample_square(&self) -> DVec3 {
+        // Generate a random sample within the pixel square for anti-aliasing
+        let mut rng = rand::rng(); // Create a random number generator
+        let px = -0.5 + rng.random::<f64>(); // Generate a random offset in the x direction
+        let py = -0.5 + rng.random::<f64>(); // Generate a random offset in the y direction
+        
+        (px * self.pixel_delta_lr) + (py * self.pixel_delta_ud) // Calculate the sample position within the pixel square
     }
 
     fn render(&self, world: &HittableList) -> Image {
         // Render the scene by generating an image based on the camera parameters and the world objects
         Image::new_with_init(self.img_height, self.img_width, |row, col| {
             // Initialize each pixel with a color based on its position
+            /*
             let pixel_center =
                 &self.pixel00_loc + (row as f64) * &self.pixel_delta_ud + (col as f64) * &self.pixel_delta_lr;
             let ray_dir = &pixel_center - &self.camera_center; // Calculate the direction of the ray from the camera center to the pixel center
@@ -80,12 +108,22 @@ impl Camera {
                 origin: self.camera_center,
                 direction: ray_dir,
             }; // Create a new ray with the camera center as the origin and the calculated direction
+            */
 
-            let pixel_color = ray.color(world) * self.max_value; // Calculate the color of the pixel based on the ray's color and scale it to max_value
+            let scale_factor = (self.samples_per_pixel as f64).recip(); // Calculate the scale factor for averaging colors
+            let multisampled_pixel_color = (0..self.samples_per_pixel)
+                .into_iter() // Create an iterator for the number of samples per pixel
+                .map(|_| {
+                    let ray = self.get_ray(col as i32, row as i32); // Get a ray for the current pixel
+                    ray.color(world) * self.max_value // Calculate the color of the ray based on its intersection with objects in the world
+                })
+                .fold(DVec3::ZERO, |acc, color| acc + color) * scale_factor; // Sum the colors and apply the scale factor
+
+            //let pixel_color = ray.color(world) * self.max_value; // Calculate the color of the pixel based on the ray's color and scale it to max_value
             Pixel {
-                r: pixel_color.x as u8, // Extract the red component of the color
-                g: pixel_color.y as u8, // Extract the green component of the color
-                b: pixel_color.z as u8, // Extract the blue component of the color
+                r: multisampled_pixel_color.x as u8, // Extract the red component of the color
+                g: multisampled_pixel_color.y as u8, // Extract the green component of the color
+                b: multisampled_pixel_color.z as u8, // Extract the blue component of the color
             }
         })
     }
