@@ -63,6 +63,17 @@ fn basic_scene() -> Image {
     })
 }
 
+// Function to check if a ray intersects with a sphere
+fn hit_sphere(center: &DVec3, radius: f64, ray: &Ray) -> bool {
+    let origin_center = ray.origin - *center; // Calculate the vector from the ray's origin to the sphere's center
+    let a = ray.direction.dot(ray.direction); // Calculate the dot product of the ray's direction with itself
+    let b = 2.0 * origin_center.dot(ray.direction); // Calculate the dot product of the origin-center vector with the ray's direction, multiplied by 2
+    let c = origin_center.dot(origin_center) - radius * radius; // Calculate the dot product of the origin-center vector with itself, minus the square of the radius
+
+    let discriminant = b * b - 4.0 * a * c; // Calculate the discriminant of the quadratic equation
+    discriminant >= 0.0 // Return true if the discriminant is positive, indicating that the ray intersects the sphere
+}
+
 // Function to create a sample image
 fn sample_image() -> Image { 
     let image_width = 256;
@@ -155,6 +166,10 @@ impl Ray { // Create a new Ray with a given origin and direction
     }
 
     fn color(&self) -> DVec3 {
+        if (hit_sphere(&DVec3::new(0., 0., -1.), 0.5, self)) { // Check if the ray intersects with a sphere at (0, 0, -1) with radius 0.5
+            return DVec3::new(1.0, 0.0, 0.0); // Return red color if it hits the sphere
+        }
+
         let unit_direction: DVec3 =
             self.direction.normalize();
         let a = 0.5 * (unit_direction.y + 1.0);
