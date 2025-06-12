@@ -1,0 +1,11 @@
+[package]
+name = "raysr"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+indicatif = "0.17.11"
+itertools = "0.14.0"
+
+[dev-dependencies]
+k9 = "0.12.0"
