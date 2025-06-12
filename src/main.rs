@@ -5,11 +5,13 @@ use std::{ // Import necessary modules
     fs::File, // For file operations
     io::{BufWriter, Write}, // For buffered writing
 };
+use glam::DVec3;
 use indicatif::{ProgressIterator}; // For progress bar functionality
 use itertools::Itertools; // For Cartesian product functionality
+
 fn main() -> std::io::Result<()> { 
     let mut buffer = BufWriter::new(File::create("sample.ppm")?); // Create a buffered writer to write to a file named "sample.ppm"
-    let img = sample_image(); // Generate a sample image using the `sample_image` function
+    let img = basic_scene(); // Generate a sample image using the `sample_image` function
     write!(buffer, "{}", PPM(&img))?; // Write the image data to the buffer in PPM format using the `PPM` struct
     buffer.flush()?; 
     println!("Successfully generated an image"); 
@@ -17,14 +19,58 @@ fn main() -> std::io::Result<()> {
 
 }
 
+fn basic_scene() -> Image {
+    let aspect_ratio = 16.0 / 9.0; // Define the aspect ratio of the image
+    let img_width: usize = 400;
+    let img_height = (img_width as f64 / aspect_ratio) as usize; // Calculate the height based on the aspect ratio
+
+    //camera
+    let focal_len = 1.;
+    let viewport_height = 2.;
+    let viewport_width = viewport_height * (img_width as f64 / img_height as f64); // Calculate the viewport width based on the aspect ratio
+    let camera_center = DVec3::new(0., 0., 0.); // Define the camera center in 3D space
+
+    let viewport_lr = DVec3::new(viewport_width, 0., 0.);
+    let viewport_ud = DVec3::new(0., -viewport_height, 0.);
+
+    //calculate delta vectors
+    let pixel_delta_lr = &viewport_lr / (img_width as f64); // Calculate the change in the right direction per pixel
+    let pixel_delta_ud = &viewport_ud / (img_height as f64); // Calculate the change in the up direction per pixel
+
+    //calculate the location of the upper left corner of the viewport
+    let viewport_upper_left = &camera_center - DVec3::new(0.,0.,focal_len) - (&viewport_lr / 2.) - (&viewport_ud / 2.); // Calculate the upper left corner of the viewport
+
+    let pixel00_loc = viewport_upper_left + 0.5 * (&pixel_delta_lr + &pixel_delta_ud); // Calculate the location of the pixel at row 0, column 0
+
+    Image::new_with_init(img_height, img_width, |row, col| {
+        let pixel_center = &pixel00_loc + (row as f64) * &pixel_delta_ud + (col as f64) * &pixel_delta_lr; // Calculate the center of the pixel at the given row and column
+        let ray_dir = &pixel_center - &camera_center; // Calculate the direction of the ray from the camera center to the pixel center
+        let ray = Ray { origin: pixel_center, direction: ray_dir }; // Create a new ray with the camera center as the origin and the calculated direction
+
+        let pixel_color = ray.color() * 255.999; // Calculate the color of the pixel based on the ray's color and scale it to 255
+        let r = pixel_color.x; // Extract the red component of the color
+        let g = pixel_color.y; // Extract the green component of the color
+        let b = pixel_color.z; // Extract the blue component of the color
+
+        Pixel { // Create a new Pixel struct with the calculated RGB values
+            r: r as u8, // Convert the red component to u8
+            g: g as u8, // Convert the green component to u8
+            b: b as u8, // Convert the blue component to u8
+        }
+
+        
+
+    })
+}
+
 // Function to create a sample image
 fn sample_image() -> Image { 
     let image_width = 256;
     let image_height = 256;
-    Image::new_with_init(256, 256, |row, col| { // Initialize each pixel with a color based on its position
+    Image::new_with_init(image_height, image_width, |row, col| { // Initialize each pixel with a color based on its position
         let r = col as f64 / ((image_width - 1) as f64); 
         let g = row as f64 / ((image_height - 1) as f64); 
-        let b = 0.9;
+        let b = 0.;
 
         let factor = 255.999; // Scale factor for RGB values
 
@@ -97,6 +143,27 @@ impl Image {
         self.pixels[0].len()
     }
 }
+
+struct Ray { // Represents a ray in 3D space
+    origin: DVec3,
+    direction: DVec3,
+}
+
+impl Ray { // Create a new Ray with a given origin and direction
+    fn at(&self, t: f64) -> DVec3 {
+        self.origin + t * self.direction
+    }
+
+    fn color(&self) -> DVec3 {
+        let unit_direction: DVec3 =
+            self.direction.normalize();
+        let a = 0.5 * (unit_direction.y + 1.0);
+        return (1.0 - a) * DVec3::new(1.0, 1.0, 1.0)
+            + a * DVec3::new(0.5, 0.7, 1.0);
+    }
+}
+
+
 
 // Implementing Display and Debug traits for PPM (Portable Pixmap) format
 struct PPM<'a, T>(&'a T); 
