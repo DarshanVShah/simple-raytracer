@@ -1,22 +1,24 @@
 //Creating a simple ray tracer in Rust
 
-use std::{ // Import necessary modules
-    fmt::{Display, Debug}, // For formatting output
-    fs::File, // For file operations
-    io::{BufWriter, Write}, // For buffered writing
-};
 use glam::DVec3;
-use indicatif::{ProgressIterator}; // For progress bar functionality
-use itertools::Itertools; // For Cartesian product functionality
+use indicatif::ProgressIterator; // For progress bar functionality
+use itertools::Itertools;
+use k9::snapshot::source_code::Range;
+use std::{
+    // Import necessary modules
+    fmt::{Debug, Display},  // For formatting output
+    fs::File,               // For file operations
+    io::{BufWriter, Write}, // For buffered writing
+    ops::Range as StdRange, // Rename Range to StdRange to avoid conflict
+}; // For Cartesian product functionality
 
-fn main() -> std::io::Result<()> { 
+fn main() -> std::io::Result<()> {
     let mut buffer = BufWriter::new(File::create("sample.ppm")?); // Create a buffered writer to write to a file named "sample.ppm"
     let img = basic_scene(); // Generate a sample image using the `sample_image` function
     write!(buffer, "{}", PPM(&img))?; // Write the image data to the buffer in PPM format using the `PPM` struct
-    buffer.flush()?; 
-    println!("Successfully generated an image"); 
+    buffer.flush()?;
+    println!("Successfully generated an image");
     Ok(()) // Return Ok to indicate successful completion
-
 }
 
 fn basic_scene() -> Image {
@@ -38,32 +40,49 @@ fn basic_scene() -> Image {
     let pixel_delta_ud = &viewport_ud / (img_height as f64); // Calculate the change in the up direction per pixel
 
     //calculate the location of the upper left corner of the viewport
-    let viewport_upper_left = &camera_center - DVec3::new(0.,0.,focal_len) - (&viewport_lr / 2.) - (&viewport_ud / 2.); // Calculate the upper left corner of the viewport
+    let viewport_upper_left =
+        &camera_center - DVec3::new(0., 0., focal_len) - (&viewport_lr / 2.) - (&viewport_ud / 2.); // Calculate the upper left corner of the viewport
 
     let pixel00_loc = viewport_upper_left + 0.5 * (&pixel_delta_lr + &pixel_delta_ud); // Calculate the location of the pixel at row 0, column 0
 
-    Image::new_with_init(img_height, img_width, |row, col| {
-        let pixel_center = &pixel00_loc + (row as f64) * &pixel_delta_ud + (col as f64) * &pixel_delta_lr; // Calculate the center of the pixel at the given row and column
-        let ray_dir = &pixel_center - &camera_center; // Calculate the direction of the ray from the camera center to the pixel center
-        let ray = Ray { origin: camera_center, direction: ray_dir }; // Create a new ray with the camera center as the origin and the calculated direction
+    // Create a world with hittable objects
+    let mut world = HittableList { objects: vec![] }; // Initialize a new HittableList to hold the objects in the scene
 
-        let pixel_color = ray.color() * 255.999; // Calculate the color of the pixel based on the ray's color and scale it to 255
+    world.add(Sphere {
+        // Create a sphere object
+        center: DVec3::new(0.0, 0.0, -1.0),
+        radius: 0.5,
+    });
+    world.add(Sphere {
+        center: DVec3::new(0., -100.5, -1.), // Create a ground sphere object
+        radius: 100.,
+    });
+
+    Image::new_with_init(img_height, img_width, |row, col| {
+        let pixel_center =
+            &pixel00_loc + (row as f64) * &pixel_delta_ud + (col as f64) * &pixel_delta_lr; // Calculate the center of the pixel at the given row and column
+        let ray_dir = &pixel_center - &camera_center; // Calculate the direction of the ray from the camera center to the pixel center
+        let ray = Ray {
+            origin: camera_center,
+            direction: ray_dir,
+        }; // Create a new ray with the camera center as the origin and the calculated direction
+
+        let pixel_color = ray.color(&world) * 255.999; // Calculate the color of the pixel based on the ray's color and scale it to 255
         let r = pixel_color.x; // Extract the red component of the color
         let g = pixel_color.y; // Extract the green component of the color
         let b = pixel_color.z; // Extract the blue component of the color
 
-        Pixel { // Create a new Pixel struct with the calculated RGB values
+        Pixel {
+            // Create a new Pixel struct with the calculated RGB values
             r: r as u8, // Convert the red component to u8
             g: g as u8, // Convert the green component to u8
             b: b as u8, // Convert the blue component to u8
         }
-
-        
-
     })
 }
 
 // Function to check if a ray intersects with a sphere
+/*
 fn hit_sphere(center: &DVec3, radius: f64, ray: &Ray) -> f64 {
     let origin_center = ray.origin - *center; // Calculate the vector from the ray's origin to the sphere's center
     let a = ray.direction.length_squared(); // Calculate the dot product of the ray's direction with itself
@@ -71,62 +90,189 @@ fn hit_sphere(center: &DVec3, radius: f64, ray: &Ray) -> f64 {
     let c = origin_center.length_squared() - radius * radius; // Calculate the dot product of the origin-center vector with itself, minus the square of the radius
 
     let discriminant = half_b * half_b - a * c; // Calculate the discriminant of the quadratic equation
-    
+
     if discriminant < 0. { // If the discriminant is negative, there is no intersection
         -1.0 // Return -1 to indicate no intersection
     } else {
         (- half_b - discriminant.sqrt()) / a // Calculate the intersection point using the quadratic formula
     }
 }
+*/
+
+// Trait to define hittable objects
+trait Hittable {
+    // Define a trait for objects that can be hit by rays
+    fn hit(&self, ray: &Ray, interval: StdRange<f64>) -> Option<HitRecord>; // Define a method to check if a ray hits the object within a specified range
+}
+
+struct HitRecord {
+    // Represents the details of a hit between a ray and an object
+    point: DVec3,     // The point of intersection
+    normal: DVec3,    // The normal vector at the intersection point
+    t: f64,           // The distance along the ray to the intersection point
+    front_face: bool, // Indicates if the ray hit the front face of the object
+}
+
+impl HitRecord {
+    // Create a new HitRecord with the intersection details
+
+    fn with_face_normal(point: DVec3, outward_normal: DVec3, t: f64, ray: &Ray) -> Self {
+        // Create a HitRecord with the given point, outward normal, distance t, and ray
+        let (front_face, normal) = HitRecord::calc_face_normal(ray, outward_normal); // Calculate the front face and normal vector based on the ray and outward normal
+        HitRecord {
+            // Create a new HitRecord instance with the calculated values
+            point,
+            normal,
+            t,
+            front_face,
+        }
+    }
+
+    // Function to calculate the front face and normal vector based on the ray and outward normal
+    fn calc_face_normal(ray: &Ray, outward_normal: DVec3) -> (bool, DVec3) {
+        let front_face = ray.direction.dot(outward_normal) < 0.0; // Check if the ray is hitting the front face
+        let normal = if front_face {
+            outward_normal
+        } else {
+            -outward_normal
+        }; // Set the normal vector based on whether it's the front face or not
+        (front_face, normal) // Return a tuple containing the front face status and the normal vector
+    }
+
+    //unused
+    fn set_face_normal(&mut self, ray: &Ray, outward_normal: DVec3) {
+        let (front_face, normal) = HitRecord::calc_face_normal(ray, outward_normal); // Calculate the front face and normal vector
+        self.front_face = front_face; // Set the front face status
+        self.normal = normal; // Set the normal vector
+    }
+}
+
+struct Sphere {
+    // Represents a sphere in 3D space
+    center: DVec3, // The center of the sphere
+    radius: f64,   // The radius of the sphere
+}
+
+impl Hittable for Sphere {
+    // Implement the Hittable trait for the Sphere struct
+    fn hit(&self, ray: &Ray, interval: StdRange<f64>) -> Option<HitRecord> {
+        // Check if the ray intersects with the sphere within the specified range
+        let origin_center = ray.origin - self.center; // Calculate the vector from the ray's origin to the sphere's center
+        let a = ray.direction.length_squared(); // Calculate the dot product of the ray's direction with itself
+        let half_b = origin_center.dot(ray.direction); // Calculate the dot product of the origin-center vector with the ray's direction
+        let c = origin_center.length_squared() - self.radius * self.radius; // Calculate the dot product of the origin-center vector with itself, minus the square of the radius
+
+        let discriminant = half_b * half_b - a * c; // Calculate the discriminant of the quadratic equation
+
+        if discriminant < 0. {
+            // If the discriminant is negative, there is no intersection
+            return None; // Return None to indicate no intersection
+        }
+
+        let sqrt_d = discriminant.sqrt(); // Calculate the square root of the discriminant
+        let mut t = (-half_b - sqrt_d) / a; // (ROOT) Calculate the first intersection point using the quadratic formula
+
+        if !interval.contains(&t) {
+            // If the first intersection point is not within the specified range
+            t = (-half_b + sqrt_d) / a; // Calculate the second intersection point
+            if !interval.contains(&t) {
+                // If the second intersection point is also not within the specified range
+                return None; // Return None to indicate no intersection
+            }
+        }
+
+        let point = ray.at(t); // Calculate the intersection point along the ray
+        let outward_normal = (point - self.center) / self.radius; // Calculate the outward normal vector at the intersection point
+
+        let rec = HitRecord::with_face_normal(point, outward_normal, t, ray); // Create a HitRecord with the intersection details
+
+        Some(rec) // Return a HitRecord containing the intersection details
+    }
+}
+
+struct HittableList {
+    objects: Vec<Box<dyn Hittable>>,
+} // A list of hittable objects
+
+impl HittableList { // Implement methods for the HittableList struct
+    fn clear(&mut self) {
+        self.objects = vec![] // Clear the list of objects
+    }
+
+    fn add<T>(&mut self, object: T) // Add a hittable object to the list
+    where
+        T: Hittable + 'static, // Ensure that the object implements the Hittable trait and has a static lifetime
+    {
+        self.objects.push(Box::new(object)); // Add the object to the list by boxing it
+    }
+}
+
+impl Hittable for HittableList { // Implement the Hittable trait for the HittableList struct
+    fn hit(&self, ray: &Ray, interval: StdRange<f64>) -> Option<HitRecord> {
+        let (_closest, hit_record) = self.objects.iter().fold((interval.end, None), |acc, item| {
+            if let Some(temp_rec) = item.hit(ray, interval.start..acc.0) {
+                (temp_rec.t, Some(temp_rec)) // If the item hits, return the hit record and its distance
+            } else {
+                acc // If the item does not hit, return the accumulator
+            }
+        });
+
+        hit_record // Return the closest hit record, if any
+    }
+}
 
 // Function to create a sample image
-fn sample_image() -> Image { 
+fn sample_image() -> Image {
     let image_width = 256;
     let image_height = 256;
-    Image::new_with_init(image_height, image_width, |row, col| { // Initialize each pixel with a color based on its position
-        let r = col as f64 / ((image_width - 1) as f64); 
-        let g = row as f64 / ((image_height - 1) as f64); 
+    Image::new_with_init(image_height, image_width, |row, col| {
+        // Initialize each pixel with a color based on its position
+        let r = col as f64 / ((image_width - 1) as f64);
+        let g = row as f64 / ((image_height - 1) as f64);
         let b = 0.;
 
         let factor = 255.999; // Scale factor for RGB values
 
-        let r = (r * factor) as u8; 
+        let r = (r * factor) as u8;
         let g = (g * factor) as u8;
         let b = (b * factor) as u8;
-        Pixel { r, g, b, } // Create a Pixel with the calculated RGB values
+        Pixel { r, g, b } // Create a Pixel with the calculated RGB values
     })
 }
 
 #[derive(Default)] // Default implementation for Pixel struct
 
-struct Pixel { // Represents a pixel in the image
+struct Pixel {
+    // Represents a pixel in the image
     // Each pixel has three components: red, green, and blue. In byte values.
-    r: u8, 
+    r: u8,
     g: u8,
     b: u8,
 }
 
-struct Image { // Represents an image made up of pixels
+struct Image {
+    // Represents an image made up of pixels
     pixels: Vec<Vec<Pixel>>, //2D vector of pixels
 }
 
 // Implementing methods for the Image struct
-impl Image { 
-    pub fn new(height: usize, width: usize) -> Self { // Create a new image with specified height and width
-        assert!( 
+impl Image {
+    pub fn new(height: usize, width: usize) -> Self {
+        // Create a new image with specified height and width
+        assert!(
             height > 0 && width > 0,
             "Height and width must be greater than zero"
         );
 
         let mut pixels = Vec::with_capacity(height); // Initialize a vector to hold the rows of pixels
-       
+
         // Fill the vector with rows of default pixels
-        for _ in 0..height { 
-            let mut row = Vec::with_capacity(width); 
-            for _ in 0..width { 
-                row.push(Pixel::default()) 
+        for _ in 0..height {
+            let mut row = Vec::with_capacity(width);
+            for _ in 0..width {
+                row.push(Pixel::default())
             }
-            pixels.push(row); 
+            pixels.push(row);
         }
 
         Self { pixels } // Return the new Image instance with the initialized pixels
@@ -138,7 +284,7 @@ impl Image {
         width: usize,
         init: impl Fn(usize, usize) -> Pixel,
     ) -> Self {
-        let mut image = Self::new(height, width); 
+        let mut image = Self::new(height, width);
 
         (0..height)
             .cartesian_product(0..width) // Generate all combinations of row and column indices
@@ -146,69 +292,71 @@ impl Image {
             .for_each(|(row, col)| {
                 image.pixels[row][col] = init(row, col);
             });
-    
+
         image
     }
 
-    
-    pub fn height(&self) -> usize { // Return the height of the image
-        self.pixels.len() 
+    pub fn height(&self) -> usize {
+        // Return the height of the image
+        self.pixels.len()
     }
 
-    pub fn width(&self) -> usize { // Return the width of the image
+    pub fn width(&self) -> usize {
+        // Return the width of the image
         self.pixels[0].len()
     }
 }
 
-struct Ray { // Represents a ray in 3D space
+struct Ray {
+    // Represents a ray in 3D space
     origin: DVec3,
     direction: DVec3,
 }
 
-impl Ray { // Create a new Ray with a given origin and direction
+impl Ray {
+    // Create a new Ray with a given origin and direction
     fn at(&self, t: f64) -> DVec3 {
         self.origin + t * self.direction
     }
 
-    fn color(&self) -> DVec3 {
-        let t = hit_sphere(&DVec3::new(0., 0., -1.), 0.5, self);
-        if t > 0.0 { // If the ray intersects with the sphere
-            let normal = (self.at(t) - DVec3::new(0., 0., -1.)).normalize(); // Calculate the normal vector at the intersection point
-            return 0.5 * (normal + 1.0); // Return a color based on the normal vector
-        };
+    fn color<T>(&self, world: &T) -> DVec3 // Calculate the color of the ray based on its intersection with objects in the world
+    where
+        T: Hittable, // Ensure that T implements the Hittable trait
+    {
+        if let Some(rec) = world.hit(self, 0.0..f64::INFINITY) {
+            // Check if the ray hits any object in the world
+            return 0.5 * (rec.normal + DVec3::new(1.0, 1.0, 1.0)); // Return a color based on the normal at the hit point
+        }
 
-        let unit_direction: DVec3 =
-            self.direction.normalize();
+        // If the ray does not hit any object, return a background color
+        let unit_direction: DVec3 = self.direction.normalize();
         let a = 0.5 * (unit_direction.y + 1.0);
-        return (1.0 - a) * DVec3::new(1.0, 1.0, 1.0)
-            + a * DVec3::new(0.5, 0.7, 1.0);
+        return (1.0 - a) * DVec3::new(1.0, 1.0, 1.0) + a * DVec3::new(0.5, 0.7, 1.0);
     }
 }
 
-
-
 // Implementing Display and Debug traits for PPM (Portable Pixmap) format
-struct PPM<'a, T>(&'a T); 
-impl Display for PPM<'_, Pixel> { 
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { 
+struct PPM<'a, T>(&'a T);
+impl Display for PPM<'_, Pixel> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:>3} {:>3} {:>3}", self.0.r, self.0.g, self.0.b) // Format pixel values with right alignment
     }
 }
 
-impl Debug for PPM<'_, Pixel> { 
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { 
-        write!(f, "{}", self) 
+impl Debug for PPM<'_, Pixel> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
     }
 }
 
-impl Display for PPM<'_, Image> { 
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { 
-        writeln!(f, "P3")?; 
-        writeln!(f, "{} {}", self.0.width(), self.0.height())?; 
+impl Display for PPM<'_, Image> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "P3")?;
+        writeln!(f, "{} {}", self.0.width(), self.0.height())?;
         writeln!(f, "255")?;
 
-        for row in 0..self.0.height() { 
-            for col in 0..self.0.width() { 
+        for row in 0..self.0.height() {
+            for col in 0..self.0.width() {
                 writeln!(f, "{}", PPM(&self.0.pixels[row][col]))?; // Use PPM for each pixel
             }
         }
@@ -225,8 +373,8 @@ impl Debug for PPM<'_, Image> {
 
 // Unit tests for the Pixel and Image structs, and the PPM formatting
 #[cfg(test)]
-mod test { 
-    use super::*; 
+mod test {
+    use super::*;
 
     #[test]
     fn test1() {
