@@ -418,7 +418,7 @@ impl Ray {
         // If the ray hits an object, calculate the color based on the hit record
         if let Some(rec) = world.hit(self, (0.001)..f64::INFINITY) {
             // Check if the ray hits any object in the world
-            let direction: DVec3 = random_on_hemisphere(&rec.normal); // Generate a random direction on the hemisphere defined by the hit normal
+            let direction: DVec3 = random_on_hemisphere(&rec.normal) + rec.normal; // Generate a random direction on the hemisphere defined by the hit normal
             let scattered_ray = Ray {
                 origin: rec.point, // Set the origin of the scattered ray to the hit point
                 direction,         // Set the direction of the scattered ray
